@@ -1,0 +1,29 @@
+{
+  "name": "mcp-client-bedrock",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "shx rm -rf build && tsc && shx chmod +x build/*.js",
+    "test": "node test-bedrock.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@aws-sdk/client-bedrock": "^3.525.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.883.0",
+    "@modelcontextprotocol/sdk": "^1.10.2",
+    "body-parser": "^2.2.0",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "shx": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/body-parser": "^1.19.6",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}
