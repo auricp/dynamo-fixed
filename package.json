@@ -1,0 +1,26 @@
+{
+  "name": "mcp-endpoint",
+  "version": "1.0.0",
+  "main": "endpoint.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node endpoint.js",
+    "build": "npm run build:mcp-client && npm run build:mcp-dynamo",
+    "build:mcp-client": "cd mcp-client-bedrock && npm install && npm run build",
+    "build:mcp-dynamo": "cd mcp-dynamo && npm install && npm run build"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.5.0",
+    "@aws-sdk/client-bedrock": "^3.525.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.883.0",
+    "@modelcontextprotocol/sdk": "^1.10.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^22.15.3",
+    "@types/express": "^4.17.21",
+    "@types/body-parser": "^1.19.2"
+  }
+}
