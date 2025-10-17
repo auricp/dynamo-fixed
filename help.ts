@@ -41,9 +41,7 @@ function findBestAttributeMatch(queryText: string, attributeNames: string[]): st
 }
 
 
-// ----------------------------------------------------------------------
-// 3. SMART QUERY TOOL FUNCTION (Generalized and Interpretive)
-// ----------------------------------------------------------------------
+
 
 export async function smartQuery(params: any) {
   const tableName = params.tableName;
@@ -109,85 +107,101 @@ export async function smartQuery(params: any) {
     }
 
     // --------------------------
-    // B. Handle Filter Expressions (Generalized Attribute/Value Mapping)
+    // B. Handle Filter Expressions (New Solution: Attribute-Centric Parsing)
     // --------------------------
     let valueIndex = 0;
-
-    // A simple regex to detect common date formats (YYYY-MM-DD or variations)
+    // Regex to detect common date formats (YYYY-MM-DD or variations)
     const datePattern = /\d{4}[-/]\d{2}[-/]\d{2}/;
+    let filterFound = false;
 
-    // 1. Find simple string equality or range matches (e.g., 'from China', 'currency USD', 'amount > 100')
-    const matchPatterns = [
-        /(?:from|is|in|for)\s+([A-Za-z0-9\s-]+)/i, // e.g., 'from China', 'on 2025-02-25'
-        /(\w+)\s*(>=|<=|>|<|=)\s*([A-Za-z0-9\s.-]+)/i, // e.g., 'Amount > 1000', 'Date > 2025-02-25'
-        /(\w+)\s+([A-Za-z0-9\s-]+)/i // e.g., 'currency USD' (needs context)
-    ];
+    // Helper function to process, add a filter part, and increment valueIndex
+    const processAndAddFilter = (targetAttribute: string, op: string, rawValue: string) => {
+        let value = rawValue.trim().replace(/['"]/g, '');
+        
+        if (!value) return false; // Return false if no value found
 
-    for (const pattern of matchPatterns) {
-        let match;
-        const tempQuery = queryText; 
+        const key = `:val${valueIndex}`;
+        const hashName = `#attr${valueIndex}`;
+        
+        let parsedValue: any;
+        const isDateField = targetAttribute.toLowerCase().includes('date') || targetAttribute.toLowerCase().includes('time');
 
-        while ((match = pattern.exec(tempQuery)) !== null) {
-            // Determine the value: it's either group 1, 3, or the final word of group 2 depending on the pattern
-            let value = match[1] || match[3] || match[2] || '';
-            value = value.trim().replace(/['"]/g, '');
-
-            if (!value) continue;
-
-            // Determine the field keyword based on the pattern
-            let fieldKeyword = match.length > 3 ? match[1] : queryText.split(value)[0] || '';
-            
-            // Determine the operator
-            let op = match[2] || '='; // For simple matches, assume '='
-
-            // Use the helper to map the keyword/context to a schema attribute
-            const targetAttribute = findBestAttributeMatch(queryText, attributeNames);
-
-            if (targetAttribute) {
-                const key = `:val${valueIndex}`;
-                const hashName = `#attr${valueIndex}`;
-                
-                // --- FIX FOR DATE COMPARISON ---
-                let parsedValue: any;
-                const isDateField = targetAttribute.toLowerCase().includes('date') || targetAttribute.toLowerCase().includes('time');
-
-                if (isDateField && value.match(datePattern)) {
-                    // If it's a date field and the value looks like a date,
-                    // parse it and convert it to a standard ISO string for consistent comparison.
-                    const date = new Date(value);
-                    if (!isNaN(date.getTime())) {
-                        // Use the local date portion for comparison, adjusting for timezone if necessary
-                        // This assumes dates are stored as YYYY-MM-DD or similar string format in DynamoDB
-                        parsedValue = date.toISOString().split('T')[0]; // Use YYYY-MM-DD
-                        
-                        // If the operator is comparison (>, <, >=, <=) and it's a date, we need to adjust the value
-                        // to encompass the entire day, but for basic string sorting, YYYY-MM-DD is often enough.
-                        // If the stored dates include time, you may need to append 'T00:00:00.000Z' or 'T23:59:59.999Z'
-                        // to the parsedValue based on the operator, but we'll stick to YYYY-MM-DD for simplicity.
-                        // If the query includes time, the full date string will be used.
-                    } else {
-                        parsedValue = value; // Fallback to raw string if parsing fails
-                    }
-                } else {
-                    // Handle numbers and other strings
-                    parsedValue = !isNaN(parseFloat(value)) && isFinite(parseFloat(value)) ? parseFloat(value) : value;
-                }
-                // --- END FIX ---
-
-                // Add the filter condition
-                filterParts.push(`${hashName} ${op} ${key}`);
-
-                // Populate expression attribute names and values
-                expressionAttributeValues[key] = parsedValue;
-                expressionAttributeNames[hashName] = targetAttribute;
-                valueIndex++;
+        if (isDateField && value.match(datePattern)) {
+            // Robust Date Parsing for range comparisons
+            const date = new Date(value);
+            if (!isNaN(date.getTime())) {
+                // Normalize to YYYY-MM-DD for consistent string comparison.
+                // This ensures 'after 2025-02-25' correctly maps to Date > '2025-02-25'
+                parsedValue = date.toISOString().split('T')[0];
+            } else {
+                parsedValue = value; // Fallback to raw string
             }
-            // Break after the first meaningful match for simplicity in this implementation
-            break; 
+        } else {
+            // Handle numbers and other strings
+            parsedValue = !isNaN(parseFloat(value)) && isFinite(parseFloat(value)) ? parseFloat(value) : value;
         }
-        if (filterParts.length > 0) break; // If a filter was created, stop trying other patterns
+
+        // Add the filter condition
+        filterParts.push(`${hashName} ${op} ${key}`);
+
+        // Populate expression attribute names and values
+        expressionAttributeValues[key] = parsedValue;
+        expressionAttributeNames[hashName] = targetAttribute;
+        valueIndex++;
+        return true; // Filter successfully added
+    };
+
+    // 1. Try to find the implied target attribute first using keywords (e.g., 'date', 'source')
+    const impliedTargetAttribute = findBestAttributeMatch(queryText, attributeNames);
+
+    if (impliedTargetAttribute) {
+        // A. Look for Natural Language Operators + Value (e.g., 'after 2025-02-25', 'less than 100')
+        const naturalOpMatch = queryText.match(/(after|before|less than|greater than)\s+([A-Za-z0-9\s.-]+)/i);
+
+        if (naturalOpMatch) {
+            const operatorPhrase = naturalOpMatch[1].toLowerCase();
+            let op = '=';
+            if (operatorPhrase.includes('after') || operatorPhrase.includes('greater than')) op = '>';
+            else if (operatorPhrase.includes('before') || operatorPhrase.includes('less than')) op = '<';
+            
+            if (processAndAddFilter(impliedTargetAttribute, op, naturalOpMatch[2])) {
+                 filterFound = true;
+            }
+        }
     }
 
+    // 2. Look for Explicit Attribute + Operator + Value (e.g., 'Amount > 100' or 'Date <= 2025-01-01')
+    // This pattern handles structured queries well.
+    if (!filterFound) {
+        // The regex captures a keyword/attribute, an operator, and a value
+        const explicitMatch = queryText.match(/(\w+)\s*(>=|<=|>|<|=)\s*([A-Za-z0-9\s.-]+)/i);
+        
+        if (explicitMatch) {
+            // explicitMatch[1] = Attribute Name (or keyword), explicitMatch[2] = Operator, explicitMatch[3] = Value
+            // Use findBestAttributeMatch on the captured attribute/keyword to map it back to a schema name
+            const matchedAttr = findBestAttributeMatch(explicitMatch[1], attributeNames); 
+            if (matchedAttr) {
+                if (processAndAddFilter(matchedAttr, explicitMatch[2], explicitMatch[3])) {
+                    filterFound = true;
+                }
+            }
+        }
+    }
+    
+    // 3. Fallback: Simple Attribute + Value (implied equality) (e.g., 'country China', 'type domestic')
+    if (!filterFound) {
+        const simpleMatch = queryText.match(/(\w+)\s+([A-Za-z0-9\s-]+)/i);
+        if (simpleMatch) {
+            // simpleMatch[1] = Attribute/Keyword, simpleMatch[2] = Value
+            const matchedAttr = findBestAttributeMatch(simpleMatch[1], attributeNames);
+            if (matchedAttr) {
+                if (processAndAddFilter(matchedAttr, '=', simpleMatch[2])) {
+                    filterFound = true;
+                }
+            }
+        }
+    }
+    
     if (filterParts.length > 0) {
         filterExpression = filterParts.join(" AND ");
     }
@@ -243,3 +257,28 @@ export async function smartQuery(params: any) {
     };
   }
 }
+
+
+export const DYNAMODB_SMART_QUERY_TOOL: Tool = {
+  name: "dynamodb:smart_query",
+  description: 
+    "**FALLBACK TOOL:** Performs an advanced, interpretive query on a DynamoDB table. Use this ONLY as a last resort when attempts with structured query tools (like 'dynamodb:query' or 'dynamodb:scan') have failed, or if the user's request is highly generalized (e.g., 'get the highest amount') or requires complex natural language interpretation. Requires tableName and queryText arguments.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      tableName: {
+        type: "string",
+        description: "The name of the DynamoDB table to query.",
+      },
+      queryText: {
+        type: "string",
+        description: "The natural language query provided by the user (e.g., 'records from China', 'highest Amount').",
+      },
+      limit: {
+        type: "number",
+        description: "Optional: The maximum number of items to return (default is 100).",
+      },
+    },
+    required: ["tableName", "queryText"],
+  },
+};
