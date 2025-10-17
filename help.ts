@@ -89,9 +89,12 @@ export async function smartQuery(params: any) {
       // Perform a full scan to get all items and sort them in-memory
       const scanCmd = new ScanCommand({ TableName: tableName });
       const result = await dynamoClient.send(scanCmd);
+      
+      // Reverted to implicit 'any[]'
       const items = (result.Items ?? []).map(item => unmarshall(item));
 
-      items.sort((a, b) =>
+      // Reverted sort function parameter types to 'any'
+      items.sort((a: any, b: any) =>
         isHighest
           ? (Number(b[numericField] ?? 0) || 0) - (Number(a[numericField] ?? 0) || 0)
           : (Number(a[numericField] ?? 0) || 0) - (Number(b[numericField] ?? 0) || 0)
@@ -110,16 +113,19 @@ export async function smartQuery(params: any) {
     // --------------------------
     let valueIndex = 0;
 
+    // A simple regex to detect common date formats (YYYY-MM-DD or variations)
+    const datePattern = /\d{4}[-/]\d{2}[-/]\d{2}/;
+
     // 1. Find simple string equality or range matches (e.g., 'from China', 'currency USD', 'amount > 100')
     const matchPatterns = [
-        /(?:from|is|in|for)\s+([A-Za-z0-9\s]+)/i, // e.g., 'from China'
-        /(\w+)\s*(>=|<=|>|<|=)\s*([A-Za-z0-9\s.]+)/i, // e.g., 'Amount > 1000'
-        /(\w+)\s+([A-Za-z0-9\s]+)/i // e.g., 'currency USD' (needs context)
+        /(?:from|is|in|for)\s+([A-Za-z0-9\s-]+)/i, // e.g., 'from China', 'on 2025-02-25'
+        /(\w+)\s*(>=|<=|>|<|=)\s*([A-Za-z0-9\s.-]+)/i, // e.g., 'Amount > 1000', 'Date > 2025-02-25'
+        /(\w+)\s+([A-Za-z0-9\s-]+)/i // e.g., 'currency USD' (needs context)
     ];
 
     for (const pattern of matchPatterns) {
         let match;
-        const tempQuery = queryText; // Use a temp variable for iterative regex matching if needed
+        const tempQuery = queryText; 
 
         while ((match = pattern.exec(tempQuery)) !== null) {
             // Determine the value: it's either group 1, 3, or the final word of group 2 depending on the pattern
@@ -140,12 +146,38 @@ export async function smartQuery(params: any) {
             if (targetAttribute) {
                 const key = `:val${valueIndex}`;
                 const hashName = `#attr${valueIndex}`;
+                
+                // --- FIX FOR DATE COMPARISON ---
+                let parsedValue: any;
+                const isDateField = targetAttribute.toLowerCase().includes('date') || targetAttribute.toLowerCase().includes('time');
+
+                if (isDateField && value.match(datePattern)) {
+                    // If it's a date field and the value looks like a date,
+                    // parse it and convert it to a standard ISO string for consistent comparison.
+                    const date = new Date(value);
+                    if (!isNaN(date.getTime())) {
+                        // Use the local date portion for comparison, adjusting for timezone if necessary
+                        // This assumes dates are stored as YYYY-MM-DD or similar string format in DynamoDB
+                        parsedValue = date.toISOString().split('T')[0]; // Use YYYY-MM-DD
+                        
+                        // If the operator is comparison (>, <, >=, <=) and it's a date, we need to adjust the value
+                        // to encompass the entire day, but for basic string sorting, YYYY-MM-DD is often enough.
+                        // If the stored dates include time, you may need to append 'T00:00:00.000Z' or 'T23:59:59.999Z'
+                        // to the parsedValue based on the operator, but we'll stick to YYYY-MM-DD for simplicity.
+                        // If the query includes time, the full date string will be used.
+                    } else {
+                        parsedValue = value; // Fallback to raw string if parsing fails
+                    }
+                } else {
+                    // Handle numbers and other strings
+                    parsedValue = !isNaN(parseFloat(value)) && isFinite(parseFloat(value)) ? parseFloat(value) : value;
+                }
+                // --- END FIX ---
 
                 // Add the filter condition
                 filterParts.push(`${hashName} ${op} ${key}`);
 
-                // Populate expression attribute names and values, converting numbers if applicable
-                const parsedValue = !isNaN(parseFloat(value)) && isFinite(parseFloat(value)) ? parseFloat(value) : value;
+                // Populate expression attribute names and values
                 expressionAttributeValues[key] = parsedValue;
                 expressionAttributeNames[hashName] = targetAttribute;
                 valueIndex++;
@@ -180,6 +212,7 @@ export async function smartQuery(params: any) {
         });
 
         const result = await dynamoClient.send(scanCmd);
+        // Reverted to implicit 'any[]'
         const items = (result.Items ?? []).map(item => unmarshall(item));
 
         return {
@@ -210,32 +243,3 @@ export async function smartQuery(params: any) {
     };
   }
 }
-
-
-// ----------------------------------------------------------------------
-// 4. TOOL DECLARATION (Updated Description)
-// ----------------------------------------------------------------------
-
-export const DYNAMODB_SMART_QUERY_TOOL: Tool = {
-  name: "dynamodb:smart_query",
-  description: 
-    "Performs an advanced, interpretive query on a DynamoDB table. Use this ONLY when the user's request involves natural language filtering (e.g., 'records from China'), non-standard operators (e.g., 'get the highest amount'), or implicit attribute mapping (e.g., matching 'price' to an 'Amount' column). Requires tableName and queryText arguments.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      tableName: {
-        type: "string",
-        description: "The name of the DynamoDB table to query.",
-      },
-      queryText: {
-        type: "string",
-        description: "The natural language query provided by the user (e.g., 'records from China', 'highest Amount').",
-      },
-      limit: {
-        type: "number",
-        description: "Optional: The maximum number of items to return (default is 100).",
-      },
-    },
-    required: ["tableName", "queryText"],
-  },
-};
