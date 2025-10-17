@@ -1,4 +1,15 @@
 
+// Helper to map natural language keywords to best matching attribute in the schema
+function findBestAttributeMatch(queryText: string, attributeNames: string[]): string | undefined {
+  const lowerQuery = queryText.toLowerCase();
+
+  // 1. Direct match (e.g., query includes 'Amount', attribute is 'Amount')
+  for (const attr of attributeNames) {
+    if (lowerQuery.includes(attr.toLowerCase())) {
+      return attr; // Return the exact attribute name from the schema
+    }
+  }
+
   // 2. Keyword-to-Attribute mapping (Heuristics for common schema patterns)
   // Maps common natural language concepts to likely column names.
   const keywordMap: [string | RegExp, string[]][] = [
